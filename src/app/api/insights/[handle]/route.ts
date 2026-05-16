@@ -23,7 +23,14 @@ export async function GET(_request: Request, context: { params: Promise<{ handle
       insight: bundle.insights[0] || null,
       thumbnails: bundle.thumbnails,
       chats: bundle.chats,
-      kpis: calculateKpis(bundle.posts, bundle.insights.length, bundle.thumbnails.length),
+      kpis: calculateKpis(
+        bundle.posts.map((post: any) => ({
+          views: Number(post.views || 0),
+          engagement_rate: Number(post.engagement_rate || 0)
+        })),
+        bundle.insights.length,
+        bundle.thumbnails.length
+      ),
       storage: { status: "saved" }
     });
   } catch (error) {
@@ -33,4 +40,3 @@ export async function GET(_request: Request, context: { params: Promise<{ handle
     );
   }
 }
-
