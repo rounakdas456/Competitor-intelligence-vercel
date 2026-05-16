@@ -55,7 +55,7 @@ export async function POST(request: NextRequest) {
       videos: posts,
       insight,
       thumbnails: thumbnailRows,
-      kpis: calculateKpis(posts, 1, thumbnailRows.length),
+      kpis: calculateKpis(videos, 1, thumbnailRows.length),
       storage: { status: "saved" }
     });
   } catch (error) {
