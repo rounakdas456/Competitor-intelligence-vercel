@@ -15,6 +15,11 @@ export async function GET(_request: Request, context: { params: Promise<{ handle
       return NextResponse.json({ error: "Competitor has not been analyzed yet" }, { status: 404 });
     }
 
+    const kpiVideos = bundle.posts.map((post: any) => ({
+      views: Number(post.views || 0),
+      engagement_rate: Number(post.engagement_rate || 0)
+    }));
+
     return NextResponse.json({
       handle,
       channel: bundle.competitor,
@@ -23,14 +28,7 @@ export async function GET(_request: Request, context: { params: Promise<{ handle
       insight: bundle.insights[0] || null,
       thumbnails: bundle.thumbnails,
       chats: bundle.chats,
-      kpis: calculateKpis(
-        bundle.posts.map((post: any) => ({
-          views: Number(post.views || 0),
-          engagement_rate: Number(post.engagement_rate || 0)
-        })),
-        bundle.insights.length,
-        bundle.thumbnails.length
-      ),
+      kpis: calculateKpis(kpiVideos, bundle.insights.length, bundle.thumbnails.length),
       storage: { status: "saved" }
     });
   } catch (error) {

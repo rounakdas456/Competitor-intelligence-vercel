@@ -1,16 +1,45 @@
 import postgres from "postgres";
 import type { StrategyInsight, ThumbnailInsight, YouTubeChannel, YouTubeVideo } from "./types";
 
-let client: postgres.Sql | null = null;
+type DbRow = Record<string, any>;
+type DbRows = DbRow[];
+type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+
+let client: postgres.Sql<any> | null = null;
 let schemaReady = false;
 
+function toJsonValue(value: unknown): JsonValue {
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+
+  if (Array.isArray(value)) {
+    return value.map(toJsonValue);
+  }
+
+  if (typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([, item]) => item !== undefined)
+        .map(([key, item]) => [key, toJsonValue(item)])
+    );
+  }
+
+  return null;
+}
+
 export function sql() {
-  if (!process.env.DATABASE_URL) {
+  const databaseUrl = process.env.DATABASE_URL;
+  if (!databaseUrl) {
     throw new Error("DATABASE_URL is not configured");
   }
 
   if (!client) {
-    client = postgres(process.env.DATABASE_URL, {
+    client = postgres(databaseUrl, {
       max: 3,
       idle_timeout: 10,
       connect_timeout: 20,
@@ -105,7 +134,7 @@ export async function ensureSchema() {
   schemaReady = true;
 }
 
-export async function upsertCompetitor(channel: YouTubeChannel) {
+export async function upsertCompetitor(channel: YouTubeChannel): Promise<DbRow> {
   await ensureSchema();
   const [competitor] = await sql()`
     insert into ci_competitors (handle, channel_id, title, description, thumbnail_url, updated_at)
@@ -122,10 +151,11 @@ export async function upsertCompetitor(channel: YouTubeChannel) {
   return competitor;
 }
 
-export async function upsertPosts(competitorId: string, videos: YouTubeVideo[]) {
+export async function upsertPosts(competitorId: string, videos: YouTubeVideo[]): Promise<DbRows> {
   await ensureSchema();
-  const rows = [];
+  const rows: DbRows = [];
   for (const video of videos) {
+    const rawData = toJsonValue(video.raw_data ?? {});
     const [row] = await sql()`
       insert into ci_posts (
         competitor_id, video_id, title, description, thumbnail_url, video_url,
@@ -133,7 +163,7 @@ export async function upsertPosts(competitorId: string, videos: YouTubeVideo[]) 
       )
       values (
         ${competitorId}, ${video.video_id}, ${video.title}, ${video.description}, ${video.thumbnail_url}, ${video.video_url},
-        ${video.views}, ${video.likes}, ${video.comments}, ${video.engagement_rate}, ${video.published_at}, ${sql().json(video.raw_data || {})}, now()
+        ${video.views}, ${video.likes}, ${video.comments}, ${video.engagement_rate}, ${video.published_at}, ${sql().json(rawData)}, now()
       )
       on conflict (video_id)
       do update set
@@ -155,8 +185,9 @@ export async function upsertPosts(competitorId: string, videos: YouTubeVideo[]) 
   return rows;
 }
 
-export async function storeInsight(competitorId: string, handle: string, analysis: StrategyInsight) {
+export async function storeInsight(competitorId: string, handle: string, analysis: StrategyInsight): Promise<DbRow> {
   await ensureSchema();
+  const fullAnalysis = toJsonValue(analysis);
   const [row] = await sql()`
     insert into ci_insights (
       competitor_id, handle, content_theme, strategy_summary, virality_reason,
@@ -164,7 +195,7 @@ export async function storeInsight(competitorId: string, handle: string, analysi
     )
     values (
       ${competitorId}, ${handle}, ${analysis.content_theme}, ${analysis.strategy_summary}, ${analysis.virality_reason},
-      ${analysis.audience_type}, ${analysis.emotional_hook}, ${analysis.confidence_score || 0}, ${sql().json(analysis)}
+      ${analysis.audience_type}, ${analysis.emotional_hook}, ${analysis.confidence_score || 0}, ${sql().json(fullAnalysis)}
     )
     returning *
   `;
@@ -175,8 +206,9 @@ export async function storeThumbnailAnalysis(
   competitorId: string,
   postId: string | null,
   analysis: ThumbnailInsight
-) {
+): Promise<DbRow> {
   await ensureSchema();
+  const fullAnalysis = toJsonValue(analysis);
   const [row] = await sql()`
     insert into ci_thumbnail_analyses (
       competitor_id, post_id, video_id, visual_hook, thumbnail_strategy,
@@ -185,7 +217,7 @@ export async function storeThumbnailAnalysis(
     values (
       ${competitorId}, ${postId}, ${analysis.video_id}, ${analysis.visual_hook}, ${analysis.thumbnail_strategy},
       ${analysis.text_overlay}, ${analysis.emotion_signal}, ${analysis.improvement_idea}, ${analysis.confidence_score || 0},
-      ${sql().json(analysis)}, now()
+      ${sql().json(fullAnalysis)}, now()
     )
     on conflict (video_id)
     do update set
@@ -202,7 +234,12 @@ export async function storeThumbnailAnalysis(
   return row;
 }
 
-export async function storeChat(handle: string, competitorId: string | null, question: string, answer: string) {
+export async function storeChat(
+  handle: string,
+  competitorId: string | null,
+  question: string,
+  answer: string
+): Promise<DbRow> {
   await ensureSchema();
   const [row] = await sql()`
     insert into ci_chat_messages (handle, competitor_id, question, answer)
@@ -212,13 +249,19 @@ export async function storeChat(handle: string, competitorId: string | null, que
   return row;
 }
 
-export async function getCompetitorByHandle(handle: string) {
+export async function getCompetitorByHandle(handle: string): Promise<DbRow | null> {
   await ensureSchema();
   const [row] = await sql()`select * from ci_competitors where lower(handle) = lower(${handle}) limit 1`;
   return row || null;
 }
 
-export async function getAnalysisBundle(handle: string) {
+export async function getAnalysisBundle(handle: string): Promise<{
+  competitor: DbRow;
+  posts: DbRows;
+  insights: DbRows;
+  thumbnails: DbRows;
+  chats: DbRows;
+} | null> {
   await ensureSchema();
   const competitor = await getCompetitorByHandle(handle);
   if (!competitor) return null;
@@ -233,7 +276,7 @@ export async function getAnalysisBundle(handle: string) {
   return { competitor, posts, insights, thumbnails, chats };
 }
 
-export async function getCompetitors() {
+export async function getCompetitors(): Promise<DbRows> {
   await ensureSchema();
   return sql()`select * from ci_competitors order by updated_at desc limit 20`;
 }
